@@ -1,5 +1,9 @@
-#include<Windows.h>
+#include<windows.h>
 #include<stdio.h>
+#include <tlhelp32.h>
+#pragma warning(disable:4996)
+//https://www.cnblogs.com/jentleTao/p/12728142.html
+//https://blog.csdn.net/qq_18218335/article/details/75246816
 
 typedef struct _INJECT_DATA {
 	BYTE ShellCode[0x20];		//0x00
@@ -18,7 +22,7 @@ VOID ShellCodeFun(VOID) {
 	L001:
 		pop ebx
 		sub ebx,5
-		push dowrd ptr ds:[ebx+0x24]	//lpParameter
+		push dword ptr ds:[ebx+0x24]	//lpParameter
 		call dword ptr ds:[ebx+0x20]	//ThreadProc
 		xor eax,eax
 		push eax
@@ -27,6 +31,19 @@ VOID ShellCodeFun(VOID) {
 		nop
 	}
 }
+
+typedef DWORD(WINAPI * PCreateThread)(
+	IN HANDLE                     ProcessHandle,
+	IN PSECURITY_DESCRIPTOR     SecurityDescriptor,
+	IN BOOL                     CreateSuspended,
+	IN ULONG                    StackZeroBits,
+	IN OUT PULONG                StackReserved,
+	IN OUT PULONG                StackCommit,
+	IN LPVOID                    StartAddress,
+	IN LPVOID                    StartParameter,
+	OUT HANDLE                     ThreadHandle,
+	OUT LPVOID                    ClientID
+	);
 
 HANDLE RtlCreatRemoteThead(
 	IN HANDLE hProcess,
@@ -37,14 +54,16 @@ HANDLE RtlCreatRemoteThead(
 	IN DWORD dwCreationFlags,
 	OUT LPDWORD lpThreadId
 ) {
-	NTSTATUS status = STATUS_SUCCESS;
-	CLIENT_ID Cid;
+	PCreateThread RtlCreateUserThread;
+	LPVOID Cid;
+	NTSTATUS status = NULL;
 	HANDLE hThread = NULL;
 	DWORD dwIoCnt = 0;
 	if (hProcess == NULL || lpStartAddress == NULL)
 		return NULL;
 
 	//获取Native API函数的地址
+
 	RtlCreateUserThread = (PCreateThread)GetProcAddress(GetModuleHandle("ntdll"), \
 		"RtlCreateUserThread");
 	if (RtlCreateUserThread == NULL)
@@ -56,7 +75,7 @@ HANDLE RtlCreatRemoteThead(
 	if (pMem == NULL)
 		return NULL;
 
-	printf("[*] pMen = 0x%p\n", pMem);
+	printf("[*] pMem = 0x%p\n", pMem);
 
 	INJECT_DATA Data;
 	PBYTE pShellCode = (PBYTE)ShellCodeFun;
@@ -85,24 +104,83 @@ HANDLE RtlCreatRemoteThead(
 
 	status = RtlCreateUserThread(
 		hProcess,
-		lpThreadAttribute,  //ThreadSecurityDescriptor
+		lpThreadAttributes,	//ThreadSecurityDescriptor
 		TRUE,	//CreateSuspend
 		0,		//ZeroBits
-		dwStackSize,	//MaximumStackSize
-		0,	//CommittedStackSize
-		(PUSER_THREAD_START_ROUTINE)pMem,	//pMem的开头就是Shellcode
+		0,		//MaximumStackSize
+		0,		//CommittedStackSize
+		(LPVOID)pMem,	//pMem的开头就是Shellcode
 		NULL,
 		&hThread,
 		&Cid
 	);
 	if (status >= 0) {
 		printf("创建线程成功\n");
+		/*
 		if (lpThreadId != NULL) {
 			*lpThreadId = (DWORD)Cid.UniqueThread;
-		}
+		}*/
 		if (!(dwCreationFlags & CREATE_SUSPENDED)) {
 			ResumeThread(hThread);
 		}
 	}
 	return hThread;
+}
+
+int main() {
+
+	FARPROC pFuncProcAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+	const char* pszDllFileName = "C:\\Users\\42914\\Desktop\\注入\\dll注入\\Dll1\\Release\\Dll1.dll";
+	SIZE_T dwWriteSize = 0;
+
+
+
+	HANDLE snapshot;
+	PROCESSENTRY32 entry;
+	DWORD dwProcessId;
+	entry.dwSize = sizeof(PROCESSENTRY32);
+	snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+	if (Process32First(snapshot, &entry) == TRUE)
+	{
+		while (Process32Next(snapshot, &entry) == TRUE)
+		{
+			if (stricmp(entry.szExeFile, "Meteor.exe") == 0)
+			{
+				HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, entry.th32ProcessID);
+				
+				
+				LPVOID lpPathAddr = VirtualAllocEx(
+					hProcess,                   // 目标进程句柄
+					0,                          // 指定申请地址
+					strlen(pszDllFileName) + 1,   // 申请空间大小
+					MEM_RESERVE | MEM_COMMIT, // 内存的状态
+					PAGE_READWRITE);            // 内存属性
+				if (NULL == lpPathAddr)
+				{
+					MessageBox(NULL, "在目标进程中申请空间失败！", "在目标进程中申请空间失败！", MB_OK);
+					CloseHandle(hProcess);
+					return FALSE;
+				}
+
+				if (FALSE == WriteProcessMemory(
+					hProcess,                   // 目标进程句柄
+					lpPathAddr,                 // 目标进程地址
+					pszDllFileName,                 // 写入的缓冲区
+					strlen(pszDllFileName) + 1,   // 缓冲区大小
+					&dwWriteSize))              // 实际写入大小
+				{
+					MessageBox(NULL, "目标进程中写入Dll路径失败！", "目标进程中写入Dll路径失败！", MB_OK);
+					CloseHandle(hProcess);
+					return FALSE;
+				}
+				
+				RtlCreatRemoteThead(hProcess,NULL,NULL, (PTHREAD_START_ROUTINE)pFuncProcAddr, lpPathAddr,NULL,NULL);
+				dwProcessId = GetProcessId(hProcess);
+				CloseHandle(hProcess);
+			}
+		}
+	}
+
+	printf("done");
+	return 0;
 }
