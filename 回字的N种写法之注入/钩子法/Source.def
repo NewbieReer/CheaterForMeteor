@@ -1,0 +1,4 @@
+LIBRARY
+
+EXPORTS SetGlobalHook
+EXPORTS UnSetGlobalHook
