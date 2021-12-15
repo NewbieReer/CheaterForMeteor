@@ -1,0 +1,5 @@
+这里放hook的练习
+
+hook 分为两大类——Inline Hook和Address Hook
+Address Hook修改的是地址
+Inline Hook修改的是指令
